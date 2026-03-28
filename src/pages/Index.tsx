@@ -73,7 +73,7 @@ export default function ExecutiveDashboard() {
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard icon={Target} label="Pipeline Health" value={`${executiveSummary.pipelineHealth}%`} gradient="stat-gradient-blue" subtitle="Overall succession readiness" />
+          <StatCard icon={Target} label="Pipeline Health" value={executiveSummary.pipelineHealth > 0 ? `${executiveSummary.pipelineHealth}%` : executiveSummary.pipelineHealthLabel} gradient="stat-gradient-blue" subtitle={`Status: ${executiveSummary.pipelineHealthLabel}`} />
           <StatCard icon={AlertTriangle} label="Urgent Roles" value={executiveSummary.urgentRoles} gradient="stat-gradient-red" subtitle="Requiring immediate action" />
           <StatCard icon={Users} label="Internal Ready" value={internalCount} gradient="stat-gradient-green" subtitle={`${externalCount} external, ${hybridCount} hybrid`} />
           <StatCard icon={TrendingUp} label="Forecasted Roles" value={executiveSummary.totalForecastedRoles} gradient="stat-gradient-amber" subtitle="Next 6–12 months" />
