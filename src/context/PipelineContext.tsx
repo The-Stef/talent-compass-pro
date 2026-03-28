@@ -46,38 +46,52 @@ const PipelineContext = createContext<PipelineState | undefined>(undefined);
 function parsePipelineResponse(data: any): Omit<PipelineState, "isLoading" | "isRunning" | "error" | "isUsingDemoData" | "runAnalysis" | "refreshData"> {
   const agents = data?.data?.agents ?? data?.agents ?? data;
 
-  const roleForecast = agents?.role_forecast ?? agents?.roleForecast ?? {};
-  const trajectories = agents?.employee_trajectories ?? agents?.employeeTrajectories ?? {};
-  const matches = agents?.role_matches ?? agents?.roleMatches ?? {};
-  const devPlans = agents?.development_plans ?? agents?.developmentPlans ?? {};
-  const finalDecision = agents?.final_decision ?? agents?.finalDecision ?? {};
+  const roleForecast = agents?.role_forecast ?? {};
+  const trajectories = agents?.employee_trajectories ?? {};
+  const matches = agents?.role_matches ?? {};
+  const devPlans = agents?.development_plans ?? {};
+  const finalDecision = agents?.final_decision ?? {};
 
+  // Forecasted Roles: from prioritized_roles
   const forecastedRoles = mapForecastedRoles(
-    roleForecast?.roles ?? roleForecast?.forecasted_roles ?? roleForecast?.data ?? []
+    roleForecast?.prioritized_roles ?? roleForecast?.roles ?? roleForecast?.forecasted_roles ?? roleForecast?.data ?? []
   );
+
+  // Employee Trajectories: from employee_trajectories nested key
   const employeeTrajectories = mapEmployeeTrajectories(
-    trajectories?.employees ?? trajectories?.trajectories ?? trajectories?.data ?? []
+    trajectories?.employee_trajectories ?? trajectories?.employees ?? trajectories?.trajectories ?? trajectories?.data ?? []
   );
+
+  // Role Matches: from role_matches nested key
   const roleMatches = mapRoleMatches(
-    matches?.matches ?? matches?.role_matches ?? matches?.data ?? []
+    matches?.role_matches ?? matches?.matches ?? matches?.data ?? []
   );
+
+  // Development Plans: from development_plans nested key (nested structure with interventions)
   const developmentInterventions = mapDevelopmentInterventions(
-    devPlans?.interventions ?? devPlans?.plans ?? devPlans?.data ?? []
+    devPlans?.development_plans ?? devPlans?.interventions ?? devPlans?.plans ?? devPlans?.data ?? []
   );
+
+  // Executive Decisions
   const executiveDecisions = mapExecutiveDecisions(
     finalDecision?.decisions ?? finalDecision?.recommendations ?? finalDecision?.data ?? []
   );
 
-  const executiveSummary = deriveExecutiveSummary(forecastedRoles, roleMatches, executiveDecisions);
-
-  // Override with backend summary fields if present
-  const backendSummary = finalDecision?.summary ?? finalDecision?.executive_summary ?? {};
-  if (backendSummary.pipeline_health != null) executiveSummary.pipelineHealth = backendSummary.pipeline_health;
-  if (backendSummary.top_risks) executiveSummary.topRisks = backendSummary.top_risks;
-  if (backendSummary.hidden_talent) executiveSummary.hiddenTalent = backendSummary.hidden_talent;
+  // Build summary with backend data
+  const executiveSummary = deriveExecutiveSummary(forecastedRoles, roleMatches, executiveDecisions, {
+    pipeline_health: finalDecision?.pipeline_health ?? matches?.overall_pipeline_health,
+    executive_summary: finalDecision?.executive_summary,
+    org_risks: finalDecision?.org_risks,
+    top_hidden_talent: finalDecision?.top_hidden_talent,
+  });
 
   return { forecastedRoles, employeeTrajectories, roleMatches, developmentInterventions, executiveDecisions, executiveSummary };
 }
+
+const defaultSummary: ExecutiveSummaryData = {
+  ...demoSummary,
+  pipelineHealthLabel: "moderate",
+};
 
 export function PipelineProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<{
@@ -97,7 +111,7 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     roleMatches: demoMatches,
     developmentInterventions: demoInterventions,
     executiveDecisions: demoDecisions,
-    executiveSummary: demoSummary,
+    executiveSummary: defaultSummary,
     isLoading: true,
     isRunning: false,
     error: null,
@@ -109,7 +123,6 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await getLastPipeline();
       if (response?.success === false && !response?.data) {
-        // No previous results — keep demo data
         setState((s) => ({ ...s, isLoading: false, isUsingDemoData: true }));
         return;
       }
@@ -121,7 +134,6 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
         setState((s) => ({ ...s, isLoading: false, isUsingDemoData: true }));
       }
     } catch {
-      // Backend unavailable — silently fall back to demo data
       setState((s) => ({ ...s, isLoading: false, isUsingDemoData: true }));
     }
   }, []);

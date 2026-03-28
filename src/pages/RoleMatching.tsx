@@ -15,6 +15,9 @@ function MatchCard({ match }: { match: RoleMatch }) {
         <div className="flex-1">
           <div className="flex items-center gap-3 mb-2">
             <StatusBadge status={match.recommendedAction} variant="action" />
+            {match.externalHireNeeded && match.recommendedAction !== 'external' && (
+              <span className="text-[10px] text-warning bg-warning/10 px-2 py-0.5 rounded border border-warning/20">External also needed</span>
+            )}
             <ScoreRing score={match.urgencyScore} size="sm" />
           </div>
           <h3 className="font-display text-lg font-semibold text-foreground">{match.roleTitle}</h3>
