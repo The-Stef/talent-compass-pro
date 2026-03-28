@@ -1,11 +1,12 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { ScoreRing } from "@/components/ScoreRing";
 import { StatusBadge } from "@/components/StatusBadge";
-import { employeeTrajectories } from "@/data/demo-data";
+import { usePipeline } from "@/context/PipelineContext";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Clock, TrendingUp, Zap, AlertCircle } from "lucide-react";
+import type { EmployeeTrajectory } from "@/data/demo-data";
 
-function EmployeeCard({ emp }: { emp: typeof employeeTrajectories[0] }) {
+function EmployeeCard({ emp }: { emp: EmployeeTrajectory }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -78,6 +79,8 @@ function EmployeeCard({ emp }: { emp: typeof employeeTrajectories[0] }) {
 }
 
 export default function EmployeeTrajectories() {
+  const { employeeTrajectories } = usePipeline();
+
   return (
     <DashboardLayout>
       <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">

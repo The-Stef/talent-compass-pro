@@ -1,8 +1,9 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { StatusBadge } from "@/components/StatusBadge";
-import { developmentInterventions } from "@/data/demo-data";
+import { usePipeline } from "@/context/PipelineContext";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, BookOpen, Users2, RotateCw, FolderKanban, HeartHandshake } from "lucide-react";
+import type { DevelopmentIntervention } from "@/data/demo-data";
 
 const typeIcons: Record<string, React.ElementType> = {
   training: BookOpen,
@@ -12,7 +13,7 @@ const typeIcons: Record<string, React.ElementType> = {
   coaching: Users2,
 };
 
-function InterventionCard({ intervention }: { intervention: typeof developmentInterventions[0] }) {
+function InterventionCard({ intervention }: { intervention: DevelopmentIntervention }) {
   const [expanded, setExpanded] = useState(false);
   const Icon = typeIcons[intervention.type] || BookOpen;
 
@@ -70,11 +71,13 @@ function InterventionCard({ intervention }: { intervention: typeof developmentIn
 }
 
 export default function DevelopmentPlans() {
+  const { developmentInterventions } = usePipeline();
+
   const grouped = developmentInterventions.reduce((acc, item) => {
     if (!acc[item.employeeName]) acc[item.employeeName] = [];
     acc[item.employeeName].push(item);
     return acc;
-  }, {} as Record<string, typeof developmentInterventions>);
+  }, {} as Record<string, DevelopmentIntervention[]>);
 
   return (
     <DashboardLayout>

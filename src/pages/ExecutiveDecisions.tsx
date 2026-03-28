@@ -1,10 +1,12 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { ScoreRing } from "@/components/ScoreRing";
 import { StatusBadge } from "@/components/StatusBadge";
-import { executiveDecisions, executiveSummary } from "@/data/demo-data";
+import { usePipeline } from "@/context/PipelineContext";
 import { FileCheck, ArrowRight, AlertTriangle, CheckCircle2, Clock } from "lucide-react";
 
 export default function ExecutiveDecisions() {
+  const { executiveDecisions, executiveSummary } = usePipeline();
+
   return (
     <DashboardLayout>
       <div className="max-w-5xl mx-auto space-y-8 animate-fade-in">
@@ -26,7 +28,7 @@ export default function ExecutiveDecisions() {
               BMW has strong internal candidates for <span className="font-semibold text-success">{executiveSummary.internalReady} positions</span>,
               requires <span className="font-semibold text-destructive">{executiveSummary.externalRequired} external hire</span>,
               and <span className="font-semibold text-warning">{executiveSummary.hybridApproach} hybrid approach</span>.
-              Immediate attention required for {executiveSummary.urgentRoles} critical roles impacting Neue Klasse, autonomous driving, and AI platform strategies.
+              Immediate attention required for {executiveSummary.urgentRoles} critical roles.
             </p>
           </div>
         </div>

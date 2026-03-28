@@ -1,11 +1,12 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { ScoreRing } from "@/components/ScoreRing";
 import { StatusBadge } from "@/components/StatusBadge";
-import { roleMatches } from "@/data/demo-data";
+import { usePipeline } from "@/context/PipelineContext";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, ExternalLink, UserCheck } from "lucide-react";
+import type { RoleMatch } from "@/data/demo-data";
 
-function MatchCard({ match }: { match: typeof roleMatches[0] }) {
+function MatchCard({ match }: { match: RoleMatch }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -25,7 +26,6 @@ function MatchCard({ match }: { match: typeof roleMatches[0] }) {
         </div>
       </div>
 
-      {/* Candidates */}
       <div className="mt-4 space-y-3">
         {match.candidates.map((c) => (
           <div key={c.employeeId} className="flex items-center gap-4 p-3 rounded-lg bg-secondary/30 border border-border/50">
@@ -73,6 +73,8 @@ function MatchCard({ match }: { match: typeof roleMatches[0] }) {
 }
 
 export default function RoleMatching() {
+  const { roleMatches } = usePipeline();
+
   return (
     <DashboardLayout>
       <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">
