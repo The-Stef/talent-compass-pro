@@ -39,6 +39,7 @@ export interface RoleMatch {
     gapSummary: string;
   }[];
   externalReasoning?: string;
+  externalHireNeeded?: boolean;
   urgencyScore: number;
 }
 
