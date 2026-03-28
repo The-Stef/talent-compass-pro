@@ -1,8 +1,8 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { ScoreRing } from "@/components/ScoreRing";
 import { StatusBadge } from "@/components/StatusBadge";
-import { executiveSummary, forecastedRoles, roleMatches, executiveDecisions } from "@/data/demo-data";
-import { AlertTriangle, TrendingUp, Users, Target, Sparkles, Shield } from "lucide-react";
+import { usePipeline } from "@/context/PipelineContext";
+import { AlertTriangle, TrendingUp, Users, Target, Sparkles, Shield, Play, Loader2, Info } from "lucide-react";
 
 function StatCard({ icon: Icon, label, value, gradient, subtitle }: {
   icon: React.ElementType; label: string; value: string | number; gradient: string; subtitle?: string;
@@ -22,6 +22,15 @@ function StatCard({ icon: Icon, label, value, gradient, subtitle }: {
 }
 
 export default function ExecutiveDashboard() {
+  const {
+    executiveSummary,
+    roleMatches,
+    executiveDecisions,
+    isRunning,
+    isUsingDemoData,
+    runAnalysis,
+  } = usePipeline();
+
   const internalCount = roleMatches.filter(r => r.recommendedAction === 'internal').length;
   const externalCount = roleMatches.filter(r => r.recommendedAction === 'external').length;
   const hybridCount = roleMatches.filter(r => r.recommendedAction === 'hybrid').length;
@@ -30,9 +39,36 @@ export default function ExecutiveDashboard() {
     <DashboardLayout>
       <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
         {/* Header */}
-        <div>
-          <h1 className="font-display text-3xl font-bold text-foreground">Executive Dashboard</h1>
-          <p className="text-muted-foreground mt-1">AI-powered talent intelligence overview — BMW Group</p>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="font-display text-3xl font-bold text-foreground">Executive Dashboard</h1>
+            <p className="text-muted-foreground mt-1">AI-powered talent intelligence overview — BMW Group</p>
+          </div>
+          <div className="flex items-center gap-3">
+            {isUsingDemoData && (
+              <span className="flex items-center gap-1.5 text-xs text-warning bg-warning/10 px-3 py-1.5 rounded-full border border-warning/20">
+                <Info className="w-3 h-3" />
+                Demo Data
+              </span>
+            )}
+            <button
+              onClick={() => runAnalysis()}
+              disabled={isRunning}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-lg stat-gradient-blue text-primary-foreground font-medium text-sm hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {isRunning ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Running Analysis…
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4" />
+                  Run Analysis
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* KPI Cards */}

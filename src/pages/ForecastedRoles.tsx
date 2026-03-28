@@ -1,11 +1,12 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { ScoreRing } from "@/components/ScoreRing";
 import { StatusBadge } from "@/components/StatusBadge";
-import { forecastedRoles } from "@/data/demo-data";
+import { usePipeline } from "@/context/PipelineContext";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Clock, AlertTriangle } from "lucide-react";
+import type { ForecastedRole } from "@/data/demo-data";
 
-function RoleCard({ role }: { role: typeof forecastedRoles[0] }) {
+function RoleCard({ role }: { role: ForecastedRole }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -60,6 +61,8 @@ function RoleCard({ role }: { role: typeof forecastedRoles[0] }) {
 }
 
 export default function ForecastedRoles() {
+  const { forecastedRoles } = usePipeline();
+
   return (
     <DashboardLayout>
       <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">

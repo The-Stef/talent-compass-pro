@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PipelineProvider } from "@/context/PipelineContext";
 import Index from "./pages/Index.tsx";
 import ForecastedRoles from "./pages/ForecastedRoles.tsx";
 import EmployeeTrajectories from "./pages/EmployeeTrajectories.tsx";
@@ -18,17 +19,19 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          <Route path="/roles" element={<ForecastedRoles />} />
-          <Route path="/trajectories" element={<EmployeeTrajectories />} />
-          <Route path="/matching" element={<RoleMatching />} />
-          <Route path="/development" element={<DevelopmentPlans />} />
-          <Route path="/decisions" element={<ExecutiveDecisions />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
+      <PipelineProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            <Route path="/roles" element={<ForecastedRoles />} />
+            <Route path="/trajectories" element={<EmployeeTrajectories />} />
+            <Route path="/matching" element={<RoleMatching />} />
+            <Route path="/development" element={<DevelopmentPlans />} />
+            <Route path="/decisions" element={<ExecutiveDecisions />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </PipelineProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );
