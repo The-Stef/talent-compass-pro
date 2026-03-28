@@ -7,7 +7,6 @@ import {
   mapDevelopmentInterventions,
   mapExecutiveDecisions,
   deriveExecutiveSummary,
-  type ExecutiveSummaryData,
 } from "@/lib/mappers";
 import type {
   ForecastedRole,
@@ -15,7 +14,8 @@ import type {
   RoleMatch,
   DevelopmentIntervention,
   ExecutiveDecision,
-} from "@/data/demo-data";
+  ExecutiveSummaryData,
+} from "@/types/display";
 import {
   forecastedRoles as demoRoles,
   employeeTrajectories as demoTrajectories,
@@ -43,6 +43,11 @@ interface PipelineState {
 
 const PipelineContext = createContext<PipelineState | undefined>(undefined);
 
+/**
+ * Parse pipeline API response into display types.
+ * Handles both wrapped ({ data: { agents: ... } }) and unwrapped ({ agents: ... }) shapes.
+ * Each agent section is mapped independently — a failure in one never blanks another.
+ */
 function parsePipelineResponse(data: any): Omit<PipelineState, "isLoading" | "isRunning" | "error" | "isUsingDemoData" | "runAnalysis" | "refreshData"> {
   const agents = data?.data?.agents ?? data?.agents ?? data;
 
@@ -52,32 +57,27 @@ function parsePipelineResponse(data: any): Omit<PipelineState, "isLoading" | "is
   const devPlans = agents?.development_plans ?? {};
   const finalDecision = agents?.final_decision ?? {};
 
-  // Forecasted Roles: from prioritized_roles
+  // Each mapper handles missing/malformed input gracefully → returns []
   const forecastedRoles = mapForecastedRoles(
     roleForecast?.prioritized_roles ?? roleForecast?.roles ?? roleForecast?.forecasted_roles ?? roleForecast?.data ?? []
   );
 
-  // Employee Trajectories: from employee_trajectories nested key
   const employeeTrajectories = mapEmployeeTrajectories(
     trajectories?.employee_trajectories ?? trajectories?.employees ?? trajectories?.trajectories ?? trajectories?.data ?? []
   );
 
-  // Role Matches: from role_matches nested key
   const roleMatches = mapRoleMatches(
     matches?.role_matches ?? matches?.matches ?? matches?.data ?? []
   );
 
-  // Development Plans: from development_plans nested key (nested structure with interventions)
   const developmentInterventions = mapDevelopmentInterventions(
     devPlans?.development_plans ?? devPlans?.interventions ?? devPlans?.plans ?? devPlans?.data ?? []
   );
 
-  // Executive Decisions
   const executiveDecisions = mapExecutiveDecisions(
     finalDecision?.decisions ?? finalDecision?.recommendations ?? finalDecision?.data ?? []
   );
 
-  // Build summary with backend data
   const executiveSummary = deriveExecutiveSummary(forecastedRoles, roleMatches, executiveDecisions, {
     pipeline_health: finalDecision?.pipeline_health ?? matches?.overall_pipeline_health,
     executive_summary: finalDecision?.executive_summary,
@@ -87,11 +87,6 @@ function parsePipelineResponse(data: any): Omit<PipelineState, "isLoading" | "is
 
   return { forecastedRoles, employeeTrajectories, roleMatches, developmentInterventions, executiveDecisions, executiveSummary };
 }
-
-const defaultSummary: ExecutiveSummaryData = {
-  ...demoSummary,
-  pipelineHealthLabel: "moderate",
-};
 
 export function PipelineProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<{
@@ -111,7 +106,7 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     roleMatches: demoMatches,
     developmentInterventions: demoInterventions,
     executiveDecisions: demoDecisions,
-    executiveSummary: defaultSummary,
+    executiveSummary: demoSummary,
     isLoading: true,
     isRunning: false,
     error: null,
