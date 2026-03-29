@@ -138,9 +138,92 @@ function pipelineHealthToLabel(health: string | number | undefined): string {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Mappers: Pipeline output → Display types
+// Mappers: Raw input + Pipeline enrichment → Display types
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Forecasted Roles: raw roles are the source of truth.
+ * Pipeline output (urgency_score, strategic_importance, risk_if_unfilled) enriches them.
+ */
+export function mapForecastedRolesFromRaw(
+  rawRoles: any[],
+  pipelineRoles?: any[]
+): ForecastedRole[] {
+  if (!Array.isArray(rawRoles)) return [];
+
+  // Index pipeline enrichment by role_id
+  const pipelineMap = new Map<string, any>();
+  if (Array.isArray(pipelineRoles)) {
+    for (const p of pipelineRoles) {
+      const id = p.role_id ?? p.id;
+      if (id) pipelineMap.set(id, p);
+    }
+  }
+
+  return rawRoles.map((r, i) => {
+    const id = r.id ?? r.role_id ?? `r${i + 1}`;
+    const enrichment = pipelineMap.get(id) ?? {};
+
+    // Urgency: pipeline > raw priority mapping
+    const urgencyScore = enrichment.urgency_score
+      ?? (r.priority === "critical" ? 95 : r.priority === "high" ? 82 : 70);
+
+    return {
+      id,
+      title: r.title ?? "Untitled Role",
+      department: r.department ?? resolveDepartment(r.department_id) ?? "",
+      urgencyScore,
+      openingTimeline: monthsToTimeline(r.opening_in_months),
+      strategicImportance: enrichment.strategic_importance ?? r.context ?? "",
+      keyRequirements: enrichment.key_requirements_summary ?? r.required_skills ?? [],
+      riskIfUnfilled: enrichment.risk_if_unfilled ?? "",
+      status: toUrgencyStatus(urgencyScore),
+    };
+  });
+}
+
+/**
+ * Employee Trajectories: raw employees are the source of truth.
+ * Pipeline output (trajectory_score, readiness, growth_velocity, strengths, gaps) enriches them.
+ */
+export function mapEmployeeTrajectoriesFromRaw(
+  rawEmployees: any[],
+  pipelineTrajectories?: any[]
+): EmployeeTrajectory[] {
+  if (!Array.isArray(rawEmployees)) return [];
+
+  // Index pipeline enrichment by employee_id
+  const pipelineMap = new Map<string, any>();
+  if (Array.isArray(pipelineTrajectories)) {
+    for (const p of pipelineTrajectories) {
+      const id = p.employee_id ?? p.id;
+      if (id) pipelineMap.set(id, p);
+    }
+  }
+
+  return rawEmployees.map((e, i) => {
+    const id = e.id ?? e.employee_id ?? `e${i + 1}`;
+    const enrichment = pipelineMap.get(id) ?? {};
+
+    return {
+      id,
+      name: e.name ?? "Unknown",
+      currentRole: e.current_role ?? e.currentRole ?? "",
+      department: e.department ?? resolveDepartment(e.department_id) ?? "",
+      tenure: e.tenure_years ?? e.tenure ?? 0,
+      trajectoryScore: enrichment.trajectory_score ?? 0,
+      readinessHorizon: enrichment.readiness_horizon_months != null
+        ? monthsToReadiness(enrichment.readiness_horizon_months)
+        : "",
+      growthVelocity: mapGrowthVelocity(enrichment.growth_velocity ?? "medium"),
+      strengths: enrichment.key_strengths ?? e.skills ?? [],
+      criticalGaps: enrichment.critical_gaps ?? e.readiness_gaps ?? [],
+      photoSeed: i + 1,
+    };
+  });
+}
+
+/** Legacy mapper kept for backward compatibility with pure pipeline data */
 export function mapForecastedRoles(raw: any[]): ForecastedRole[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((r, i) => ({
@@ -156,6 +239,7 @@ export function mapForecastedRoles(raw: any[]): ForecastedRole[] {
   }));
 }
 
+/** Legacy mapper kept for backward compatibility with pure pipeline data */
 export function mapEmployeeTrajectories(raw: any[]): EmployeeTrajectory[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((e, i) => ({
