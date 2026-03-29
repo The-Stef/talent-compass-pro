@@ -86,4 +86,5 @@ export interface ExecutiveSummaryData {
   topRisks: string[];
   hiddenTalent: string[];
   analysisTimestamp: string;
+  executiveSummaryText: string;
 }

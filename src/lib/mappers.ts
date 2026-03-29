@@ -6,12 +6,11 @@
  *   2. Pipeline output = AI-generated analysis (scores, matches, plans)
  *   3. Display = UI-friendly (readable labels, resolved departments, badges)
  *
- * Mappers derive display fields in the frontend. They handle:
- *   - snake_case → camelCase conversion
- *   - Categorical → numeric/label conversion
- *   - department_id → department name resolution
- *   - Backward compatibility with old and new backend schemas
- *   - Safe fallbacks: missing fields never blank the UI
+ * Rules:
+ *   - Raw roles / raw employees are always the source of truth
+ *   - Pipeline output only enriches analysis fields
+ *   - Do NOT let AI summaries overwrite structured raw data
+ *   - Missing enrichment must never blank the UI
  */
 
 import type {
@@ -23,6 +22,30 @@ import type {
   ExecutiveSummaryData,
 } from "@/types/display";
 import { resolveDepartment } from "@/data/departments";
+
+// ═══════════════════════════════════════════════════════════════
+// Small utilities
+// ═══════════════════════════════════════════════════════════════
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v) => typeof v === "string")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && !Number.isNaN(value) ? value : null;
+}
+
+function resolveDepartmentName(obj: any): string {
+  return obj?.department ?? resolveDepartment(obj?.department_id) ?? obj?.department_id ?? "";
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Display derivation utilities
@@ -37,7 +60,7 @@ function toUrgencyStatus(score: number): "critical" | "high" | "medium" {
 function monthsToTimeline(months: number | string | undefined): string {
   if (months == null) return "";
   const m = typeof months === "string" ? parseInt(months, 10) : months;
-  if (isNaN(m)) return String(months);
+  if (Number.isNaN(m)) return String(months);
   if (m <= 3) return "Q2 2026";
   if (m <= 6) return "Q3 2026";
   if (m <= 9) return "Q4 2026";
@@ -47,7 +70,7 @@ function monthsToTimeline(months: number | string | undefined): string {
 function monthsToReadiness(months: number | string | undefined): string {
   if (months == null) return "";
   const m = typeof months === "string" ? parseInt(months, 10) : months;
-  if (isNaN(m)) return String(months);
+  if (Number.isNaN(m)) return String(months);
   if (m <= 3) return "0–3 months";
   if (m <= 6) return "3–6 months";
   if (m <= 12) return "6–12 months";
@@ -55,7 +78,7 @@ function monthsToReadiness(months: number | string | undefined): string {
   return `${m}+ months`;
 }
 
-function mapGrowthVelocity(v: string): "accelerating" | "steady" | "plateau" {
+function mapGrowthVelocity(v: string | undefined): "accelerating" | "steady" | "plateau" {
   const map: Record<string, "accelerating" | "steady" | "plateau"> = {
     high: "accelerating",
     medium: "steady",
@@ -64,13 +87,13 @@ function mapGrowthVelocity(v: string): "accelerating" | "steady" | "plateau" {
     steady: "steady",
     plateau: "plateau",
   };
-  return map[v?.toLowerCase()] ?? "steady";
+  return map[v?.toLowerCase() ?? ""] ?? "steady";
 }
 
 function confidenceToNumber(c: string | number): number {
   if (typeof c === "number") return c;
   const map: Record<string, number> = { high: 90, medium: 75, low: 55 };
-  return map[c?.toLowerCase()] ?? 70;
+  return map[c?.toLowerCase() ?? ""] ?? 70;
 }
 
 function mapActionType(a: string): "internal" | "external" | "hybrid" {
@@ -85,8 +108,12 @@ function mapActionType(a: string): "internal" | "external" | "hybrid" {
 
 function mapDecision(d: string): "internal promotion" | "external hire" | "hybrid approach" {
   const v = d?.toLowerCase() ?? "";
-  if (v.includes("external") && !v.includes("internal") && !v.includes("develop")) return "external hire";
-  if (v.includes("hybrid") || (v.includes("internal") && v.includes("external")) || v.includes("develop")) return "hybrid approach";
+  if (v.includes("external") && !v.includes("internal") && !v.includes("develop")) {
+    return "external hire";
+  }
+  if (v.includes("hybrid") || (v.includes("internal") && v.includes("external")) || v.includes("develop")) {
+    return "hybrid approach";
+  }
   return "internal promotion";
 }
 
@@ -108,7 +135,7 @@ function mapInterventionType(t: string): "training" | "mentorship" | "rotation" 
 }
 
 function mapUrgencyLabel(u: string | number): "immediate" | "Q2 2026" | "Q3 2026" | "Q4 2026" {
-  if (typeof u === "number") return monthsToTimeline(u) as any;
+  if (typeof u === "number") return monthsToTimeline(u) as "Q2 2026" | "Q3 2026" | "Q4 2026";
   const v = u?.toLowerCase() ?? "";
   if (v.includes("immediate") || v.includes("now")) return "immediate";
   if (v.includes("q2") || v.includes("1-month") || v.includes("3-month")) return "Q2 2026";
@@ -137,13 +164,26 @@ function pipelineHealthToLabel(health: string | number | undefined): string {
   return "moderate";
 }
 
+function inferGrowthVelocityFromPerformance(ratings: unknown): "accelerating" | "steady" | "plateau" {
+  if (!Array.isArray(ratings) || ratings.length < 2) return "steady";
+  const nums = ratings.filter((v) => typeof v === "number") as number[];
+  if (nums.length < 2) return "steady";
+  const first = nums[0];
+  const last = nums[nums.length - 1];
+  if (last - first >= 0.4) return "accelerating";
+  if (last >= first) return "steady";
+  return "plateau";
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Mappers: Raw input + Pipeline enrichment → Display types
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Forecasted Roles: raw roles are the source of truth.
- * Pipeline output (urgency_score, strategic_importance, risk_if_unfilled) enriches them.
+ * Forecasted Roles:
+ * - Raw roles are the source of truth
+ * - Pipeline only enriches urgency score and optional extra fields
+ * - Raw context/requirements must not be replaced by AI summaries
  */
 export function mapForecastedRolesFromRaw(
   rawRoles: any[],
@@ -151,40 +191,57 @@ export function mapForecastedRolesFromRaw(
 ): ForecastedRole[] {
   if (!Array.isArray(rawRoles)) return [];
 
-  // Index pipeline enrichment by role_id
   const pipelineMap = new Map<string, any>();
   if (Array.isArray(pipelineRoles)) {
     for (const p of pipelineRoles) {
-      const id = p.role_id ?? p.id;
+      const id = p?.role_id ?? p?.id;
       if (id) pipelineMap.set(id, p);
     }
   }
 
   return rawRoles.map((r, i) => {
-    const id = r.id ?? r.role_id ?? `r${i + 1}`;
-    const enrichment = pipelineMap.get(id) ?? {};
+    const id = r?.id ?? r?.role_id ?? `r${i + 1}`;
+    const enrichment = pipelineMap.get(id);
 
-    // Urgency: pipeline > raw priority mapping
-    const urgencyScore = enrichment.urgency_score
-      ?? (r.priority === "critical" ? 95 : r.priority === "high" ? 82 : 70);
+    const urgencyScore =
+      numberOrNull(enrichment?.urgency_score) ??
+      (r?.priority === "critical" ? 95 : r?.priority === "high" ? 82 : 70);
+
+    const rawRequirements = uniqueStrings([
+      ...asStringArray(r?.required_skills),
+      ...asStringArray(r?.required_leadership_traits),
+      ...asStringArray(r?.must_have_experiences),
+    ]);
 
     return {
       id,
-      title: r.title ?? "Untitled Role",
-      department: r.department ?? resolveDepartment(r.department_id) ?? "",
+      title: r?.title ?? "Untitled Role",
+      department: resolveDepartmentName(r),
       urgencyScore,
-      openingTimeline: monthsToTimeline(r.opening_in_months),
-      strategicImportance: enrichment.strategic_importance ?? r.context ?? "",
-      keyRequirements: enrichment.key_requirements_summary ?? r.required_skills ?? [],
-      riskIfUnfilled: enrichment.risk_if_unfilled ?? "",
+      openingTimeline: monthsToTimeline(r?.opening_in_months ?? enrichment?.opening_in_months),
+
+      // RAW FIRST — do not let AI overwrite role context
+      strategicImportance: r?.context ?? enrichment?.strategic_importance ?? "",
+
+      // RAW FIRST — preserve the richer raw role definition
+      keyRequirements:
+        rawRequirements.length > 0
+          ? rawRequirements
+          : asStringArray(enrichment?.key_requirements_summary),
+
+      // No raw equivalent usually exists, so enrichment is acceptable here
+      riskIfUnfilled: r?.risk_if_unfilled ?? enrichment?.risk_if_unfilled ?? "",
+
       status: toUrgencyStatus(urgencyScore),
     };
   });
 }
 
 /**
- * Employee Trajectories: raw employees are the source of truth.
- * Pipeline output (trajectory_score, readiness, growth_velocity, strengths, gaps) enriches them.
+ * Employee Trajectories:
+ * - Raw employees are the source of truth
+ * - Pipeline only enriches analysis fields like score/readiness/growth
+ * - Raw skills / readiness gaps must not be replaced by AI summaries
  */
 export function mapEmployeeTrajectoriesFromRaw(
   rawEmployees: any[],
@@ -192,90 +249,130 @@ export function mapEmployeeTrajectoriesFromRaw(
 ): EmployeeTrajectory[] {
   if (!Array.isArray(rawEmployees)) return [];
 
-  // Index pipeline enrichment by employee_id
   const pipelineMap = new Map<string, any>();
   if (Array.isArray(pipelineTrajectories)) {
     for (const p of pipelineTrajectories) {
-      const id = p.employee_id ?? p.id;
+      const id = p?.employee_id ?? p?.id;
       if (id) pipelineMap.set(id, p);
     }
   }
 
   return rawEmployees.map((e, i) => {
-    const id = e.id ?? e.employee_id ?? `e${i + 1}`;
-    const enrichment = pipelineMap.get(id) ?? {};
+    const id = e?.id ?? e?.employee_id ?? `e${i + 1}`;
+    const enrichment = pipelineMap.get(id);
+
+    const rawStrengths = uniqueStrings([
+      ...asStringArray(e?.skills),
+      ...asStringArray(e?.leadership_traits),
+      ...asStringArray(e?.critical_experiences),
+    ]);
+
+    const rawCriticalGaps = uniqueStrings(asStringArray(e?.readiness_gaps));
 
     return {
       id,
-      name: e.name ?? "Unknown",
-      currentRole: e.current_role ?? e.currentRole ?? "",
-      department: e.department ?? resolveDepartment(e.department_id) ?? "",
-      tenure: e.tenure_years ?? e.tenure ?? 0,
-      trajectoryScore: enrichment.trajectory_score ?? 0,
-      readinessHorizon: enrichment.readiness_horizon_months != null
-        ? monthsToReadiness(enrichment.readiness_horizon_months)
-        : "",
-      growthVelocity: mapGrowthVelocity(enrichment.growth_velocity ?? "medium"),
-      strengths: enrichment.key_strengths ?? e.skills ?? [],
-      criticalGaps: enrichment.critical_gaps ?? e.readiness_gaps ?? [],
+      name: e?.name ?? "Unknown",
+      currentRole: e?.current_role ?? e?.currentRole ?? "",
+      department: resolveDepartmentName(e),
+      tenure: e?.tenure_years ?? e?.tenure ?? 0,
+
+      // Analysis fields can come from pipeline
+      trajectoryScore: numberOrNull(enrichment?.trajectory_score) ?? 0,
+      readinessHorizon:
+        enrichment?.readiness_horizon_months != null
+          ? monthsToReadiness(enrichment.readiness_horizon_months)
+          : "",
+
+      // If pipeline is missing, derive a neutral/raw-friendly signal
+      growthVelocity: enrichment?.growth_velocity
+        ? mapGrowthVelocity(enrichment.growth_velocity)
+        : inferGrowthVelocityFromPerformance(e?.performance_ratings),
+
+      // RAW FIRST — preserve full raw profile
+      strengths:
+        rawStrengths.length > 0
+          ? rawStrengths
+          : asStringArray(enrichment?.key_strengths),
+
+      // RAW FIRST — preserve full raw readiness gaps
+      criticalGaps:
+        rawCriticalGaps.length > 0
+          ? rawCriticalGaps
+          : asStringArray(enrichment?.critical_gaps),
+
       photoSeed: i + 1,
     };
   });
 }
 
-/** Legacy mapper kept for backward compatibility with pure pipeline data */
+/**
+ * Legacy mapper kept for backward compatibility with pure pipeline data
+ */
 export function mapForecastedRoles(raw: any[]): ForecastedRole[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((r, i) => ({
-    id: r.role_id ?? r.id ?? `r${i + 1}`,
-    title: r.title ?? r.role_title ?? "Untitled Role",
-    department: r.department ?? resolveDepartment(r.department_id) ?? "",
-    urgencyScore: r.urgency_score ?? r.urgencyScore ?? 0,
-    openingTimeline: r.opening_timeline ?? r.openingTimeline ?? monthsToTimeline(r.opening_in_months),
-    strategicImportance: r.strategic_importance ?? r.strategicImportance ?? "",
-    keyRequirements: r.key_requirements_summary ?? r.key_requirements ?? r.keyRequirements ?? [],
-    riskIfUnfilled: r.risk_if_unfilled ?? r.riskIfUnfilled ?? "",
-    status: r.status ?? toUrgencyStatus(r.urgency_score ?? r.urgencyScore ?? 0),
+    id: r?.role_id ?? r?.id ?? `r${i + 1}`,
+    title: r?.title ?? r?.role_title ?? "Untitled Role",
+    department: resolveDepartmentName(r),
+    urgencyScore: r?.urgency_score ?? r?.urgencyScore ?? 0,
+    openingTimeline: r?.opening_timeline ?? r?.openingTimeline ?? monthsToTimeline(r?.opening_in_months),
+    strategicImportance: r?.strategic_importance ?? r?.strategicImportance ?? "",
+    keyRequirements: asStringArray(r?.key_requirements_summary ?? r?.key_requirements ?? r?.keyRequirements),
+    riskIfUnfilled: r?.risk_if_unfilled ?? r?.riskIfUnfilled ?? "",
+    status: r?.status ?? toUrgencyStatus(r?.urgency_score ?? r?.urgencyScore ?? 0),
   }));
 }
 
-/** Legacy mapper kept for backward compatibility with pure pipeline data */
+/**
+ * Legacy mapper kept for backward compatibility with pure pipeline data
+ */
 export function mapEmployeeTrajectories(raw: any[]): EmployeeTrajectory[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((e, i) => ({
-    id: e.employee_id ?? e.id ?? `e${i + 1}`,
-    name: e.name ?? e.employee_name ?? "Unknown",
-    currentRole: e.current_role ?? e.currentRole ?? "",
-    department: e.department ?? resolveDepartment(e.department_id) ?? "",
-    tenure: e.tenure ?? e.tenure_years ?? 0,
-    trajectoryScore: e.trajectory_score ?? e.trajectoryScore ?? 0,
-    readinessHorizon: e.readiness_horizon ?? e.readinessHorizon ?? monthsToReadiness(e.readiness_horizon_months),
-    growthVelocity: mapGrowthVelocity(e.growth_velocity ?? e.growthVelocity ?? "medium"),
-    strengths: e.key_strengths ?? e.strengths ?? [],
-    criticalGaps: e.critical_gaps ?? e.criticalGaps ?? [],
+    id: e?.employee_id ?? e?.id ?? `e${i + 1}`,
+    name: e?.name ?? e?.employee_name ?? "Unknown",
+    currentRole: e?.current_role ?? e?.currentRole ?? "",
+    department: resolveDepartmentName(e),
+    tenure: e?.tenure ?? e?.tenure_years ?? 0,
+    trajectoryScore: e?.trajectory_score ?? e?.trajectoryScore ?? 0,
+    readinessHorizon: e?.readiness_horizon ?? e?.readinessHorizon ?? monthsToReadiness(e?.readiness_horizon_months),
+    growthVelocity: mapGrowthVelocity(e?.growth_velocity ?? e?.growthVelocity ?? "medium"),
+    strengths: asStringArray(e?.key_strengths ?? e?.strengths),
+    criticalGaps: asStringArray(e?.critical_gaps ?? e?.criticalGaps),
     photoSeed: i + 1,
   }));
 }
 
 export function mapRoleMatches(raw: any[]): RoleMatch[] {
   if (!Array.isArray(raw)) return [];
+
   return raw.map((m, i) => ({
-    roleId: m.role_id ?? m.roleId ?? `r${i + 1}`,
-    roleTitle: m.role_title ?? m.roleTitle ?? "",
-    department: m.department ?? resolveDepartment(m.department_id) ?? "",
+    roleId: m?.role_id ?? m?.roleId ?? `r${i + 1}`,
+    roleTitle: m?.role_title ?? m?.roleTitle ?? "",
+    department: resolveDepartmentName(m),
+
     // recommendation is the primary signal — do NOT overwrite with external_hire_needed
-    recommendedAction: mapActionType(m.recommendation ?? m.recommended_action ?? m.recommendedAction ?? "internal"),
-    candidates: (m.top_candidates ?? m.candidates ?? []).map((c: any) => ({
-      employeeId: c.employee_id ?? c.employeeId ?? "",
-      employeeName: c.name ?? c.employee_name ?? c.employeeName ?? "",
-      fitScore: c.fit_score ?? c.fitScore ?? 0,
-      readinessTiming: c.readiness_timing ?? c.readinessTiming ?? monthsToReadiness(c.will_be_ready_in_months),
-      gapSummary: c.gap_summary ?? c.gapSummary ?? (Array.isArray(c.gaps_to_close) ? c.gaps_to_close.join("; ") : (c.gaps_to_close ?? "")),
+    recommendedAction: mapActionType(
+      m?.recommendation ?? m?.recommended_action ?? m?.recommendedAction ?? "internal"
+    ),
+
+    candidates: (m?.top_candidates ?? m?.candidates ?? []).map((c: any) => ({
+      employeeId: c?.employee_id ?? c?.employeeId ?? "",
+      employeeName: c?.name ?? c?.employee_name ?? c?.employeeName ?? "",
+      fitScore: c?.fit_score ?? c?.fitScore ?? 0,
+      readinessTiming:
+        c?.readiness_timing ??
+        c?.readinessTiming ??
+        monthsToReadiness(c?.will_be_ready_in_months),
+      gapSummary:
+        c?.gap_summary ??
+        c?.gapSummary ??
+        (Array.isArray(c?.gaps_to_close) ? c.gaps_to_close.join("; ") : c?.gaps_to_close ?? ""),
     })),
-    externalReasoning: m.external_hire_reasoning ?? m.externalReasoning,
-    // Preserve external_hire_needed as a separate flag
-    externalHireNeeded: m.external_hire_needed ?? false,
-    urgencyScore: m.urgency_score ?? m.urgencyScore ?? 0,
+
+    externalReasoning: m?.external_hire_reasoning ?? m?.externalReasoning,
+    externalHireNeeded: m?.external_hire_needed ?? false,
+    urgencyScore: m?.urgency_score ?? m?.urgencyScore ?? 0,
   }));
 }
 
@@ -284,16 +381,14 @@ export function mapDevelopmentInterventions(raw: any[]): DevelopmentIntervention
   const results: DevelopmentIntervention[] = [];
 
   for (const plan of raw) {
-    const employeeId = plan.employee_id ?? plan.employeeId ?? "";
-    const employeeName = plan.employee_name ?? plan.employeeName ?? "";
-    const targetRole = plan.target_role_title ?? plan.target_role ?? plan.targetRole ?? "";
-    const successMetrics = plan.success_metrics ?? plan.successMetrics ?? [];
-    const riskIfNotDone = plan.risk_if_not_done ?? plan.riskIfNotCompleted ?? "";
-
-    const interventions = plan.interventions ?? [];
+    const employeeId = plan?.employee_id ?? plan?.employeeId ?? "";
+    const employeeName = plan?.employee_name ?? plan?.employeeName ?? "";
+    const targetRole = plan?.target_role_title ?? plan?.target_role ?? plan?.targetRole ?? "";
+    const successMetrics = plan?.success_metrics ?? plan?.successMetrics ?? [];
+    const riskIfNotDone = plan?.risk_if_not_done ?? plan?.riskIfNotCompleted ?? "";
+    const interventions = plan?.interventions ?? [];
 
     if (Array.isArray(interventions) && interventions.length > 0) {
-      // Nested structure: flatten each intervention into a display card
       for (let j = 0; j < interventions.length; j++) {
         const d = interventions[j];
         results.push({
@@ -301,27 +396,26 @@ export function mapDevelopmentInterventions(raw: any[]): DevelopmentIntervention
           employeeId,
           employeeName,
           targetRole,
-          type: mapInterventionType(d.type ?? d.intervention_type ?? "training"),
-          title: d.title ?? "",
-          duration: d.duration_months ? `${d.duration_months} months` : (d.duration ?? ""),
-          priority: mapPriority(d.priority ?? "medium"),
-          gapAddressed: d.gap_addressed ?? d.gapAddressed ?? "",
+          type: mapInterventionType(d?.type ?? d?.intervention_type ?? "training"),
+          title: d?.title ?? "",
+          duration: d?.duration_months ? `${d.duration_months} months` : d?.duration ?? "",
+          priority: mapPriority(d?.priority ?? "medium"),
+          gapAddressed: d?.gap_addressed ?? d?.gapAddressed ?? "",
           successMetrics: Array.isArray(successMetrics) ? successMetrics.join("; ") : String(successMetrics),
           riskIfNotCompleted: riskIfNotDone,
         });
       }
     } else {
-      // Flat structure (legacy/demo): single card per plan
       results.push({
-        id: plan.id ?? `d${results.length + 1}`,
+        id: plan?.id ?? `d${results.length + 1}`,
         employeeId,
         employeeName,
         targetRole,
-        type: mapInterventionType(plan.type ?? plan.intervention_type ?? "training"),
-        title: plan.title ?? "",
-        duration: plan.duration ?? "",
-        priority: mapPriority(plan.priority ?? "medium"),
-        gapAddressed: plan.gap_addressed ?? plan.gapAddressed ?? "",
+        type: mapInterventionType(plan?.type ?? plan?.intervention_type ?? "training"),
+        title: plan?.title ?? "",
+        duration: plan?.duration ?? "",
+        priority: mapPriority(plan?.priority ?? "medium"),
+        gapAddressed: plan?.gap_addressed ?? plan?.gapAddressed ?? "",
         successMetrics: Array.isArray(successMetrics) ? successMetrics.join("; ") : String(successMetrics),
         riskIfNotCompleted: riskIfNotDone,
       });
@@ -333,16 +427,17 @@ export function mapDevelopmentInterventions(raw: any[]): DevelopmentIntervention
 
 export function mapExecutiveDecisions(raw: any[]): ExecutiveDecision[] {
   if (!Array.isArray(raw)) return [];
+
   return raw.map((d, i) => ({
-    roleId: d.role_id ?? d.roleId ?? `r${i + 1}`,
-    roleTitle: d.role_title ?? d.roleTitle ?? "",
-    department: d.department ?? resolveDepartment(d.department_id) ?? "",
-    decision: mapDecision(d.action_type ?? d.decision ?? "internal"),
-    primaryCandidate: d.primary_candidate ?? d.primaryCandidate ?? undefined,
-    urgency: mapUrgencyLabel(d.urgency ?? "Q3 2026"),
-    confidence: confidenceToNumber(d.confidence ?? 70),
-    keyRisk: d.key_risk ?? d.keyRisk ?? "",
-    nextStep: d.next_step ?? d.nextStep ?? "",
+    roleId: d?.role_id ?? d?.roleId ?? `r${i + 1}`,
+    roleTitle: d?.role_title ?? d?.roleTitle ?? "",
+    department: resolveDepartmentName(d),
+    decision: mapDecision(d?.action_type ?? d?.decision ?? "internal"),
+    primaryCandidate: d?.primary_candidate ?? d?.primaryCandidate ?? undefined,
+    urgency: mapUrgencyLabel(d?.urgency ?? "Q3 2026"),
+    confidence: confidenceToNumber(d?.confidence ?? 70),
+    keyRisk: d?.key_risk ?? d?.keyRisk ?? "",
+    nextStep: d?.next_step ?? d?.nextStep ?? "",
   }));
 }
 
@@ -366,21 +461,25 @@ export function deriveExecutiveSummary(
   const pipelineHealth = pipelineHealthToNumber(healthRaw);
   const pipelineHealthLabel = pipelineHealthToLabel(healthRaw);
 
-  const topRisks = backendSummary?.org_risks && backendSummary.org_risks.length > 0
-    ? backendSummary.org_risks.slice(0, 3)
-    : decisions
-        .filter((d) => d.keyRisk)
-        .sort((a, b) => a.confidence - b.confidence)
-        .slice(0, 3)
-        .map((d) => `${d.roleTitle}: ${d.keyRisk}`);
+  const topRisks =
+    backendSummary?.org_risks && backendSummary.org_risks.length > 0
+      ? backendSummary.org_risks.slice(0, 3)
+      : decisions
+          .filter((d) => d.keyRisk)
+          .sort((a, b) => a.confidence - b.confidence)
+          .slice(0, 3)
+          .map((d) => `${d.roleTitle}: ${d.keyRisk}`);
 
-  const hiddenTalent = backendSummary?.top_hidden_talent && backendSummary.top_hidden_talent.length > 0
-    ? backendSummary.top_hidden_talent.slice(0, 3).map((t: any) => `${t.name} — ${t.insight}`)
-    : matches
-        .flatMap((m) => m.candidates)
-        .filter((c) => c.fitScore >= 80)
-        .slice(0, 3)
-        .map((c) => `${c.employeeName} — fit score ${c.fitScore}%`);
+  const hiddenTalent =
+    backendSummary?.top_hidden_talent && backendSummary.top_hidden_talent.length > 0
+      ? backendSummary.top_hidden_talent
+          .slice(0, 3)
+          .map((t: any) => `${t?.name ?? "Unknown"} — ${t?.insight ?? ""}`)
+      : matches
+          .flatMap((m) => m.candidates)
+          .filter((c) => c.fitScore >= 80)
+          .slice(0, 3)
+          .map((c) => `${c.employeeName} — fit score ${c.fitScore}%`);
 
   return {
     pipelineHealth,
