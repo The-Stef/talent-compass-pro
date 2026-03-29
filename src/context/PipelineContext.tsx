@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { getLastPipeline, runPipeline, type RunPipelineRequest } from "@/lib/api";
+import { getLastPipeline, runPipeline, getEmployees, getRoles, type RunPipelineRequest } from "@/lib/api";
 import {
-  mapForecastedRoles,
-  mapEmployeeTrajectories,
+  mapForecastedRolesFromRaw,
+  mapEmployeeTrajectoriesFromRaw,
   mapRoleMatches,
   mapDevelopmentInterventions,
   mapExecutiveDecisions,
@@ -17,6 +17,8 @@ import type {
   ExecutiveSummaryData,
 } from "@/types/display";
 import {
+  rawEmployees as demoRawEmployees,
+  rawRoles as demoRawRoles,
   forecastedRoles as demoRoles,
   employeeTrajectories as demoTrajectories,
   roleMatches as demoMatches,
@@ -44,12 +46,35 @@ interface PipelineState {
 const PipelineContext = createContext<PipelineState | undefined>(undefined);
 
 /**
- * Parse pipeline API response into display types.
- * Handles both wrapped ({ data: { agents: ... } }) and unwrapped ({ agents: ... }) shapes.
- * Each agent section is mapped independently — a failure in one never blanks another.
+ * Fetch raw data (employees + roles) from the backend.
+ * Returns null arrays on failure — callers should fall back gracefully.
  */
-function parsePipelineResponse(data: any): Omit<PipelineState, "isLoading" | "isRunning" | "error" | "isUsingDemoData" | "runAnalysis" | "refreshData"> {
-  const agents = data?.data?.agents ?? data?.agents ?? data;
+async function fetchRawData(): Promise<{ employees: any[] | null; roles: any[] | null }> {
+  try {
+    const [empRes, roleRes] = await Promise.all([getEmployees(), getRoles()]);
+    return {
+      employees: Array.isArray(empRes) ? empRes : (empRes?.data ?? empRes?.employees ?? null),
+      roles: Array.isArray(roleRes) ? roleRes : (roleRes?.data ?? roleRes?.roles ?? roleRes?.forecasted_roles ?? null),
+    };
+  } catch {
+    return { employees: null, roles: null };
+  }
+}
+
+/**
+ * Parse pipeline API response + raw data into display types.
+ *
+ * KEY PRINCIPLE:
+ *   - Forecasted Roles: raw roles = source of truth, pipeline enriches (urgency, importance)
+ *   - Employee Trajectories: raw employees = source of truth, pipeline enriches (scores, velocity)
+ *   - Matching, Development, Decisions: pipeline output is the primary source
+ */
+function parsePipelineResponse(
+  pipelineData: any,
+  rawEmployees: any[] | null,
+  rawRoles: any[] | null
+): Omit<PipelineState, "isLoading" | "isRunning" | "error" | "isUsingDemoData" | "runAnalysis" | "refreshData"> {
+  const agents = pipelineData?.data?.agents ?? pipelineData?.agents ?? pipelineData;
 
   const roleForecast = agents?.role_forecast ?? {};
   const trajectories = agents?.employee_trajectories ?? {};
@@ -57,15 +82,21 @@ function parsePipelineResponse(data: any): Omit<PipelineState, "isLoading" | "is
   const devPlans = agents?.development_plans ?? {};
   const finalDecision = agents?.final_decision ?? {};
 
-  // Each mapper handles missing/malformed input gracefully → returns []
-  const forecastedRoles = mapForecastedRoles(
-    roleForecast?.prioritized_roles ?? roleForecast?.roles ?? roleForecast?.forecasted_roles ?? roleForecast?.data ?? []
-  );
+  // Pipeline enrichment arrays
+  const pipelineRoles = roleForecast?.prioritized_roles ?? roleForecast?.roles ?? roleForecast?.forecasted_roles ?? roleForecast?.data ?? [];
+  const pipelineTrajectories = trajectories?.employee_trajectories ?? trajectories?.employees ?? trajectories?.trajectories ?? trajectories?.data ?? [];
 
-  const employeeTrajectories = mapEmployeeTrajectories(
-    trajectories?.employee_trajectories ?? trajectories?.employees ?? trajectories?.trajectories ?? trajectories?.data ?? []
-  );
+  // Forecasted Roles: raw data first, pipeline enriches
+  const forecastedRoles = rawRoles && rawRoles.length > 0
+    ? mapForecastedRolesFromRaw(rawRoles, pipelineRoles)
+    : mapForecastedRolesFromRaw(pipelineRoles); // fallback: use pipeline as raw if no raw data
 
+  // Employee Trajectories: raw data first, pipeline enriches
+  const employeeTrajectories = rawEmployees && rawEmployees.length > 0
+    ? mapEmployeeTrajectoriesFromRaw(rawEmployees, pipelineTrajectories)
+    : mapEmployeeTrajectoriesFromRaw(pipelineTrajectories); // fallback
+
+  // These are purely pipeline-generated — no raw equivalent
   const roleMatches = mapRoleMatches(
     matches?.role_matches ?? matches?.matches ?? matches?.data ?? []
   );
@@ -116,12 +147,24 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
   const loadLastPipeline = useCallback(async () => {
     setState((s) => ({ ...s, isLoading: true, error: null }));
     try {
-      const response = await getLastPipeline();
-      if (response?.success === false && !response?.data) {
-        setState((s) => ({ ...s, isLoading: false, isUsingDemoData: true }));
+      // Fetch raw data and pipeline output in parallel
+      const [pipelineResponse, rawData] = await Promise.all([
+        getLastPipeline().catch(() => null),
+        fetchRawData(),
+      ]);
+
+      if (!pipelineResponse || (pipelineResponse?.success === false && !pipelineResponse?.data)) {
+        // No pipeline data — if we have raw data, show it without enrichment
+        if (rawData.roles?.length || rawData.employees?.length) {
+          const parsed = parsePipelineResponse({}, rawData.employees, rawData.roles);
+          setState((s) => ({ ...s, ...parsed, isLoading: false, isUsingDemoData: false }));
+        } else {
+          setState((s) => ({ ...s, isLoading: false, isUsingDemoData: true }));
+        }
         return;
       }
-      const parsed = parsePipelineResponse(response);
+
+      const parsed = parsePipelineResponse(pipelineResponse, rawData.employees, rawData.roles);
       const hasData = parsed.forecastedRoles.length > 0 || parsed.executiveDecisions.length > 0;
       if (hasData) {
         setState((s) => ({ ...s, ...parsed, isLoading: false, isUsingDemoData: false }));
@@ -136,8 +179,13 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
   const runAnalysis = useCallback(async (params: RunPipelineRequest = {}) => {
     setState((s) => ({ ...s, isRunning: true, error: null }));
     try {
-      const response = await runPipeline(params);
-      const parsed = parsePipelineResponse(response);
+      // Fetch raw data in parallel with running pipeline
+      const [pipelineResponse, rawData] = await Promise.all([
+        runPipeline(params),
+        fetchRawData(),
+      ]);
+
+      const parsed = parsePipelineResponse(pipelineResponse, rawData.employees, rawData.roles);
       setState((s) => ({ ...s, ...parsed, isRunning: false, isUsingDemoData: false }));
       toast.success("Analysis complete — data updated across all views");
     } catch (err: any) {
